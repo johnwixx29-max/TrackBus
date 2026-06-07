@@ -2671,17 +2671,19 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _index = 0;
-  final List<Widget> _screens = const [
-    HomeScreen(),
-    SearchScreen(),
-    SavedRoutesScreen(),
-    ProfileScreen()
-  ];
+
+  void _goToTab(int i) => setState(() => _index = i);
 
   @override
   Widget build(BuildContext context) {
+    final screens = [
+      HomeScreen(onTabChange: _goToTab),
+      SearchScreen(onBack: () => _goToTab(0)),
+      SavedRoutesScreen(onBack: () => _goToTab(0)),
+      const ProfileScreen(),
+    ];
     return Scaffold(
-      body: _screens[_index],
+      body: screens[_index],
       bottomNavigationBar: BottomNavigationBar(
         type: BottomNavigationBarType.fixed,
         selectedItemColor: const Color(0xFF1A3A5C),
@@ -2703,14 +2705,20 @@ class _MainShellState extends State<MainShell> {
 // ─── HOME SCREEN ─────────────────────────────────────────────────────────────
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  final void Function(int tabIndex)? onTabChange;
+  const HomeScreen({super.key, this.onTabChange});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   late List<BusData> _arriving;
   late Timer _timer;
+  String? _destination;
+
+  static const _homePurple = Color(0xFF7B61FF);
+  static const _homeBg = Color(0xFFF8F9FE);
 
   @override
   void initState() {
@@ -2725,208 +2733,979 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  }
+
+  String _userName() {
+    final name = AuthService.currentUser?.name.trim();
+    if (name != null && name.isNotEmpty) return name.split(' ').first;
+    return 'Udiksha';
+  }
+
+  void _pickDestination() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text('Select destination',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: allStops.length,
+                itemBuilder: (_, i) {
+                  final stop = allStops[i];
+                  return ListTile(
+                    leading: const Icon(Icons.location_on,
+                        color: Color(0xFFE53935), size: 20),
+                    title: Text(stop),
+                    onTap: () {
+                      setState(() => _destination = stop);
+                      Navigator.pop(ctx);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _searchBuses() {
+    if (widget.onTabChange != null) {
+      widget.onTabChange!(1);
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SearchScreen()),
+      );
+    }
+  }
+
+  void _openSavedRoutes() {
+    if (widget.onTabChange != null) {
+      widget.onTabChange!(2);
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SavedRoutesScreen()),
+      );
+    }
+  }
+
+  String _busLabel(int index, BusData bus) {
+    final digits = bus.busNo.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.length >= 3) return 'Bus ${digits.substring(digits.length - 3)}';
+    return 'Bus ${101 + index}';
+  }
+
+  String _busDestination(BusData bus) {
+    final current = bus.stops
+        .where((s) => s.status == 'current')
+        .map((s) => s.name)
+        .firstOrNull;
+    return current ?? bus.stops.last.name;
+  }
+
+  Color _etaColor(int eta) =>
+      eta <= 5 ? const Color(0xFF22C55E) : const Color(0xFFF59E0B);
+
   @override
   Widget build(BuildContext context) {
+    final featuredBus = _arriving.isNotEmpty ? _arriving.first : allBuses.first;
+    final nearbyBuses = _arriving.take(3).toList();
+    final nextArrivals = List<BusData>.from(_arriving)..sort((a, b) => a.eta.compareTo(b.eta));
+    final arrivalList = nextArrivals.take(3).toList();
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F2F5),
-      body: Stack(
-        children: [
-          // Full blue background covering header area
-          Container(
-            height: 360,
-            decoration: const BoxDecoration(color: Color(0xFF0D2137)),
-            child: Stack(
-              children: [
-                // grid dots
-                ...[
-                  [40.0, 30.0],
-                  [100.0, 30.0],
-                  [160.0, 30.0],
-                  [220.0, 30.0],
-                  [280.0, 30.0],
-                  [340.0, 30.0],
-                  [40.0, 80.0],
-                  [100.0, 80.0],
-                  [160.0, 80.0],
-                  [220.0, 80.0],
-                  [280.0, 80.0],
-                  [340.0, 80.0],
-                  [40.0, 130.0],
-                  [100.0, 130.0],
-                  [160.0, 130.0],
-                  [220.0, 130.0],
-                  [280.0, 130.0],
-                  [340.0, 130.0],
-                ].map((p) => Positioned(
-                      left: p[0],
-                      top: p[1],
-                      child: Container(
-                        width: 3,
-                        height: 3,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.06),
-                          shape: BoxShape.circle,
+      key: _scaffoldKey,
+      backgroundColor: _homeBg,
+      drawer: _HomeDrawer(onTabChange: widget.onTabChange),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Greeting row
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 0),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    IconButton(
+                      onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      icon: const Icon(Icons.menu, color: Color(0xFF1A1A2E), size: 24),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${_greeting()}, ${_userName()} 👋',
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF0D1F35),
+                              height: 1.2,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Track live buses & plan your journey',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF6B7280),
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        IconButton(
+                          onPressed: () {},
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.notifications_outlined,
+                              color: Color(0xFF1A1A2E), size: 24),
+                        ),
+                        Positioned(
+                          right: 0,
+                          top: 2,
+                          child: Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFE53935),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Trip planner card
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Column(
+                            children: [
+                              Container(
+                                width: 10,
+                                height: 10,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF22C55E),
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              SizedBox(
+                                width: 2,
+                                height: 44,
+                                child: CustomPaint(painter: _DashedLinePainter()),
+                              ),
+                              const Icon(Icons.location_on,
+                                  color: Color(0xFFE53935), size: 16),
+                            ],
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('From',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF9CA3AF),
+                                        fontWeight: FontWeight.w500)),
+                                Row(
+                                  children: [
+                                    const Expanded(
+                                      child: Text('Current Location',
+                                          style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFF0D1F35))),
+                                    ),
+                                    Icon(Icons.gps_fixed,
+                                        size: 18,
+                                        color: _homePurple.withOpacity(0.8)),
+                                  ],
+                                ),
+                                const SizedBox(height: 14),
+                                const Text('To',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF9CA3AF),
+                                        fontWeight: FontWeight.w500)),
+                                GestureDetector(
+                                  onTap: _pickDestination,
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          _destination ?? 'Select Destination',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: _destination != null
+                                                ? FontWeight.w700
+                                                : FontWeight.w500,
+                                            color: _destination != null
+                                                ? const Color(0xFF0D1F35)
+                                                : const Color(0xFF9CA3AF),
+                                          ),
+                                        ),
+                                      ),
+                                      Icon(Icons.keyboard_arrow_down,
+                                          size: 20, color: Colors.grey.shade500),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      GestureDetector(
+                        onTap: _searchBuses,
+                        child: Container(
+                          width: double.infinity,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: _homePurple,
+                            borderRadius: BorderRadius.circular(14),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _homePurple.withOpacity(0.35),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.search, color: Colors.white, size: 22),
+                              SizedBox(width: 8),
+                              Text('Find Buses',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700)),
+                            ],
+                          ),
                         ),
                       ),
-                    )),
-                // top-right glow
-                Positioned(
-                  top: -40,
-                  right: -40,
-                  child: Container(
-                    width: 160,
-                    height: 160,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFFF4A024).withOpacity(0.07),
-                    ),
+                    ],
                   ),
                 ),
-                // bottom-left accent
-                Positioned(
-                  bottom: 20,
-                  left: -20,
-                  child: Container(
-                    width: 80,
-                    height: 80,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white.withOpacity(0.04),
-                    ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Live map card
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 16,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                        child: Row(
+                          children: [
+                            const Text('Live Map',
+                                style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    color: Color(0xFF0D1F35))),
+                            const Spacer(),
+                            GestureDetector(
+                              onTap: _searchBuses,
+                              child: const Row(
+                                children: [
+                                  Text('View Full Map',
+                                      style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: _homePurple)),
+                                  SizedBox(width: 2),
+                                  Icon(Icons.chevron_right,
+                                      size: 16, color: _homePurple),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                            bottom: Radius.circular(18)),
+                        child: SizedBox(
+                          height: 180,
+                          width: double.infinity,
+                          child: Stack(
+                            children: [
+                              CustomPaint(
+                                size: const Size(double.infinity, 180),
+                                painter: _LiveMapPainter(
+                                    buses: _arriving.take(5).toList()),
+                              ),
+                              Positioned(
+                                left: MediaQuery.of(context).size.width * 0.34,
+                                top: 48,
+                                child: _MapBusPopup(bus: featuredBus,
+                                    label: _busLabel(0, featuredBus)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Nearby Buses + Next Arrivals
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: _HomeInfoCard(
+                        title: 'Nearby Buses',
+                        linkText: 'See All',
+                        onLinkTap: _searchBuses,
+                        children: List.generate(nearbyBuses.length, (i) {
+                          final bus = nearbyBuses[i];
+                          return _HomeBusListRow(
+                            icon: Icons.directions_bus,
+                            iconColor: const Color(0xFF3B82F6),
+                            iconBg: const Color(0xFF3B82F6).withOpacity(0.1),
+                            title: _busLabel(i, bus),
+                            subtitle: _busDestination(bus),
+                            eta: '${bus.eta} mins',
+                            etaColor: _etaColor(bus.eta),
+                            trailing: bus.distance,
+                            isLast: i == nearbyBuses.length - 1,
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => BusDetailScreen(bus: bus)),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _HomeInfoCard(
+                        title: 'Next Arrivals',
+                        linkText: 'See All',
+                        onLinkTap: _searchBuses,
+                        children: List.generate(arrivalList.length, (i) {
+                          final bus = arrivalList[i];
+                          return _HomeBusListRow(
+                            icon: Icons.access_time,
+                            iconColor: _homePurple,
+                            iconBg: _homePurple.withOpacity(0.1),
+                            title: _busLabel(i, bus),
+                            subtitle: _busDestination(bus),
+                            eta: '${bus.eta} mins',
+                            etaColor: _etaColor(bus.eta),
+                            isLast: i == arrivalList.length - 1,
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => BusDetailScreen(bus: bus)),
+                            ),
+                          );
+                        }),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // Saved routes
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Text('Saved Routes',
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF0D1F35))),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: _openSavedRoutes,
+                          child: const Text('View All',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: _homePurple)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 88,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        children: const [
+                          _SavedRouteChip(
+                            from: 'Home',
+                            to: 'College',
+                            via: 'Via Main Street',
+                            icon: Icons.home,
+                            color: Color(0xFF7B61FF),
+                          ),
+                          _SavedRouteChip(
+                            from: 'Home',
+                            to: 'Market',
+                            via: 'Via Station Road',
+                            icon: Icons.storefront,
+                            color: Color(0xFF22C55E),
+                          ),
+                          _SavedRouteChip(
+                            from: 'College',
+                            to: 'Bus Stand',
+                            via: 'Via Ring Road',
+                            icon: Icons.school,
+                            color: Color(0xFF3B82F6),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          SafeArea(
-            child: SingleChildScrollView(
+        ),
+      ),
+    );
+  }
+}
+
+// ─── HOME UI HELPERS ─────────────────────────────────────────────────────────
+
+class _HomeDrawer extends StatelessWidget {
+  final void Function(int tabIndex)? onTabChange;
+
+  const _HomeDrawer({this.onTabChange});
+
+  void _go(BuildContext context, int tab) {
+    Navigator.pop(context);
+    onTabChange?.call(tab);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final user = AuthService.currentUser;
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF0D2137), Color(0xFF1A3A5C)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Header
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-                    child: Row(
-                      children: [
-                        Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                                color: const Color(0xFFF4A024),
-                                borderRadius: BorderRadius.circular(12)),
-                            child: const Icon(Icons.directions_bus,
-                                color: Colors.white, size: 28)),
-                        const SizedBox(width: 10),
-                        const Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              TrackBusLogoText(fontSize: 26),
-                              Text('Belagavi, Karnataka',
-                                  style: TextStyle(
-                                      color: Colors.white54, fontSize: 11)),
-                            ]),
-                        const Spacer(),
-                      ],
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: const Color(0xFF7B61FF).withOpacity(0.2),
+                    child: const Icon(Icons.person,
+                        color: Colors.white, size: 30),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    user?.name ?? 'Guest',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
-                  // Moving bus strip
-                  const MovingBusWidget(
-                    height: 70,
-                    busColor: Color(0xFFF4A024),
-                    roadColor: Color(0xFFF4A024),
+                  const SizedBox(height: 4),
+                  Text(
+                    user?.email ?? 'Sign in to sync your trips',
+                    style: const TextStyle(color: Colors.white60, fontSize: 12),
                   ),
-                  const SizedBox(height: 8),
-                  // Location pill
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(10)),
-                      child: const Row(children: [
-                        Icon(Icons.location_on,
-                            color: Color(0xFFF4A024), size: 18),
-                        SizedBox(width: 8),
-                        Text('📍 My Current Location — CBT',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500)),
-                      ]),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  // White card area — Recently Travelled
-                  Container(
-                    decoration: const BoxDecoration(
-                        color: Color(0xFFF0F2F5),
-                        borderRadius:
-                            BorderRadius.vertical(top: Radius.circular(24))),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(children: [
-                              const Icon(Icons.history,
-                                  color: Color(0xFF1A3A5C), size: 16),
-                              const SizedBox(width: 6),
-                              const Text('Recently Travelled',
-                                  style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF1A1A2E))),
-                              const Spacer(),
-                              Text('${UserSession.travelHistory.length} trips',
-                                  style: const TextStyle(
-                                      fontSize: 12, color: Colors.grey)),
-                            ]),
-                            const SizedBox(height: 4),
-                            const Text('Your recent bus journeys',
-                                style: TextStyle(
-                                    fontSize: 12, color: Colors.grey)),
-                            const SizedBox(height: 12),
-                            if (UserSession.travelHistory.isEmpty)
-                              Container(
-                                padding: const EdgeInsets.all(30),
-                                decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(14),
-                                    boxShadow: [
-                                      BoxShadow(
-                                          color: Colors.black.withOpacity(0.04),
-                                          blurRadius: 8)
-                                    ]),
-                                child: const Column(children: [
-                                  Icon(Icons.directions_bus_outlined,
-                                      size: 48, color: Colors.grey),
-                                  SizedBox(height: 12),
-                                  Text('No recent trips yet',
-                                      style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w500,
-                                          color: Colors.grey)),
-                                  SizedBox(height: 4),
-                                  Text(
-                                      'Search and travel to see your history here',
-                                      style: TextStyle(
-                                          fontSize: 12, color: Colors.grey),
-                                      textAlign: TextAlign.center),
-                                ]),
-                              )
-                            else
-                              ...UserSession.travelHistory
-                                  .map((t) => _RecentTripTile(trip: t))
-                                  .toList(),
-                          ]),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
                 ],
               ),
             ),
+            _DrawerTile(
+              icon: Icons.home_outlined,
+              label: 'Home',
+              onTap: () => _go(context, 0),
+            ),
+            _DrawerTile(
+              icon: Icons.search,
+              label: 'Search Buses',
+              onTap: () => _go(context, 1),
+            ),
+            _DrawerTile(
+              icon: Icons.bookmark_outline,
+              label: 'Saved Routes',
+              onTap: () => _go(context, 2),
+            ),
+            _DrawerTile(
+              icon: Icons.person_outline,
+              label: 'Profile',
+              onTap: () => _go(context, 3),
+            ),
+            const Spacer(),
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'TrackBus · Belagavi',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DrawerTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _DrawerTile({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon, color: const Color(0xFF7B61FF)),
+      title: Text(label,
+          style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF0D1F35))),
+      onTap: onTap,
+    );
+  }
+}
+
+class _DashedLinePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFFD1D5DB)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    const dashHeight = 4.0;
+    const gap = 4.0;
+    double y = 0;
+    while (y < size.height) {
+      canvas.drawLine(Offset(0, y), Offset(0, y + dashHeight), paint);
+      y += dashHeight + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _LiveMapPainter extends CustomPainter {
+  final List<BusData> buses;
+  _LiveMapPainter({required this.buses});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFFE8F0FE),
+    );
+
+    final parkPaint = Paint()..color = const Color(0xFFBBF7D0).withOpacity(0.45);
+    canvas.drawRect(
+        Rect.fromLTWH(size.width * 0.05, size.height * 0.08,
+            size.width * 0.22, size.height * 0.28),
+        parkPaint);
+    canvas.drawRect(
+        Rect.fromLTWH(size.width * 0.68, size.height * 0.55,
+            size.width * 0.25, size.height * 0.3),
+        parkPaint);
+
+    final streetPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2.5;
+    for (var i = 1; i < 5; i++) {
+      final y = size.height * i / 5;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), streetPaint);
+    }
+    for (var i = 1; i < 6; i++) {
+      final x = size.width * i / 6;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), streetPaint);
+    }
+
+    final userX = size.width * 0.48;
+    final userY = size.height * 0.52;
+    for (var r = 3; r > 0; r--) {
+      canvas.drawCircle(
+        Offset(userX, userY),
+        10.0 * r,
+        Paint()
+          ..color = const Color(0xFF3B82F6).withOpacity(0.1 * r)
+          ..style = PaintingStyle.fill,
+      );
+    }
+    canvas.drawCircle(
+      Offset(userX, userY),
+      6,
+      Paint()..color = const Color(0xFF3B82F6),
+    );
+
+    final positions = [
+      [0.2, 0.22],
+      [0.72, 0.28],
+      [0.28, 0.72],
+      [0.62, 0.68],
+      [0.82, 0.78],
+    ];
+    for (var i = 0; i < positions.length; i++) {
+      final px = size.width * positions[i][0];
+      final py = size.height * positions[i][1];
+      final isFeatured = i == 0;
+      canvas.drawCircle(
+        Offset(px, py),
+        isFeatured ? 13 : 11,
+        Paint()..color = isFeatured ? const Color(0xFF22C55E) : const Color(0xFF3B82F6),
+      );
+      final icon = TextPainter(
+        text: const TextSpan(text: '🚌', style: TextStyle(fontSize: 9)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      icon.paint(canvas, Offset(px - icon.width / 2, py - icon.height / 2));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _LiveMapPainter oldDelegate) =>
+      oldDelegate.buses != buses;
+}
+
+class _MapBusPopup extends StatelessWidget {
+  final BusData bus;
+  final String label;
+  const _MapBusPopup({required this.bus, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF0D1F35))),
+          Text('${bus.eta} mins away',
+              style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF22C55E))),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeInfoCard extends StatelessWidget {
+  final String title;
+  final String linkText;
+  final VoidCallback onLinkTap;
+  final List<Widget> children;
+
+  const _HomeInfoCard({
+    required this.title,
+    required this.linkText,
+    required this.onLinkTap,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(title,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0D1F35))),
+              ),
+              GestureDetector(
+                onTap: onLinkTap,
+                child: Text(linkText,
+                    style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF7B61FF))),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...children,
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeBusListRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final Color iconBg;
+  final String title;
+  final String subtitle;
+  final String eta;
+  final Color etaColor;
+  final String? trailing;
+  final bool isLast;
+  final VoidCallback onTap;
+
+  const _HomeBusListRow({
+    required this.icon,
+    required this.iconColor,
+    required this.iconBg,
+    required this.title,
+    required this.subtitle,
+    required this.eta,
+    required this.etaColor,
+    this.trailing,
+    required this.isLast,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: isLast ? 0 : 10),
+        child: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: iconBg,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: iconColor, size: 15),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF0D1F35))),
+                  Text(subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 9, color: Color(0xFF9CA3AF))),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(eta,
+                    style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: etaColor)),
+                if (trailing != null)
+                  Text(trailing!,
+                      style: const TextStyle(
+                          fontSize: 8, color: Color(0xFF9CA3AF))),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SavedRouteChip extends StatelessWidget {
+  final String from;
+  final String to;
+  final String via;
+  final IconData icon;
+  final Color color;
+
+  const _SavedRouteChip({
+    required this.from,
+    required this.to,
+    required this.via,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 190,
+      margin: const EdgeInsets.only(right: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$from → $to',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF0D1F35))),
+                const SizedBox(height: 2),
+                Text(via,
+                    style: const TextStyle(
+                        fontSize: 10, color: Color(0xFF9CA3AF))),
+              ],
+            ),
+          ),
+          const Icon(Icons.star, color: Color(0xFFFBBF24), size: 16),
         ],
       ),
     );
@@ -3178,7 +3957,8 @@ class _RecentTripTile extends StatelessWidget {
 // ─── SEARCH SCREEN ───────────────────────────────────────────────────────────
 
 class SearchScreen extends StatefulWidget {
-  const SearchScreen({super.key});
+  final VoidCallback? onBack;
+  const SearchScreen({super.key, this.onBack});
   @override
   State<SearchScreen> createState() => _SearchScreenState();
 }
@@ -3206,6 +3986,17 @@ class _SearchScreenState extends State<SearchScreen> {
     });
     FocusScope.of(context).unfocus();
   }
+
+  void _handleBack() {
+    if (widget.onBack != null) {
+      widget.onBack!();
+    } else if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+  }
+
+  bool get _showBack =>
+      widget.onBack != null || Navigator.canPop(context);
 
   @override
   void dispose() {
@@ -3237,6 +4028,15 @@ class _SearchScreenState extends State<SearchScreen> {
                   children: [
                     // Title
                     Row(children: [
+                      if (_showBack)
+                        IconButton(
+                          onPressed: _handleBack,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.arrow_back,
+                              color: Colors.white, size: 24),
+                        ),
+                      if (_showBack) const SizedBox(width: 8),
                       Container(
                           padding: const EdgeInsets.all(7),
                           decoration: BoxDecoration(
@@ -4126,15 +4926,29 @@ class _StopTimelineTile extends StatelessWidget {
 // ─── SAVED ROUTES SCREEN ────────────────────────────────────────────────────
 
 class SavedRoutesScreen extends StatelessWidget {
-  const SavedRoutesScreen({super.key});
+  final VoidCallback? onBack;
+  const SavedRoutesScreen({super.key, this.onBack});
+
+  void _handleBack(BuildContext context) {
+    if (onBack != null) {
+      onBack!();
+    } else if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
+  }
+
+  bool _showBack(BuildContext context) =>
+      onBack != null || Navigator.canPop(context);
+
   @override
   Widget build(BuildContext context) {
     final history = UserSession.travelHistory;
+    final showBack = _showBack(context);
     return Scaffold(
       backgroundColor: const Color(0xFFF0F2F5),
       body: Column(
         children: [
-          // ── Branded header ──
+          // ── Header ──
           Container(
             decoration: const BoxDecoration(
               color: Color(0xFF0D2137),
@@ -4142,40 +4956,28 @@ class SavedRoutesScreen extends StatelessWidget {
             child: SafeArea(
               bottom: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                padding: const EdgeInsets.fromLTRB(16, 12, 20, 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                            color: const Color(0xFFF4A024),
-                            borderRadius: BorderRadius.circular(12)),
-                        child: const Icon(Icons.directions_bus,
-                            color: Colors.white, size: 26),
-                      ),
-                      const SizedBox(width: 12),
-                      const TrackBusLogoText(fontSize: 24),
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(20),
+                      if (showBack)
+                        IconButton(
+                          onPressed: () => _handleBack(context),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.arrow_back,
+                              color: Colors.white, size: 24),
                         ),
-                        child: Row(children: const [
-                          Icon(Icons.bookmark,
-                              color: Color(0xFFF4A024), size: 14),
-                          SizedBox(width: 5),
-                          Text('Saved Routes',
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600)),
-                        ]),
-                      ),
+                      if (showBack) const SizedBox(width: 8),
+                      const Icon(Icons.bookmark,
+                          color: Color(0xFFF4A024), size: 22),
+                      const SizedBox(width: 10),
+                      const Text('Saved Routes',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800)),
                     ]),
                     const SizedBox(height: 8),
                     const Text('Your travel history & saved buses',
@@ -5772,7 +6574,7 @@ class TrackBusLogoText extends StatelessWidget {
       text: TextSpan(
         children: [
           TextSpan(
-            text: 'Track',
+            text: 'TRACK',
             style: TextStyle(
               color: trackColor,
               fontSize: fontSize,
@@ -5790,7 +6592,7 @@ class TrackBusLogoText extends StatelessWidget {
             ),
           ),
           TextSpan(
-            text: 'Bus',
+            text: 'BUS',
             style: TextStyle(
               color: busColor,
               fontSize: fontSize,
